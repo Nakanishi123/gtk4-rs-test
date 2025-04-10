@@ -1,0 +1,53 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+        shell: pwsh
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install and Build GTK4
+        shell: pwsh
+        run: |
+          # 必要な依存をChocolatey経由で入れるよ
+          choco install -y visualstudio2022-workload-vctools msys2 python3
+          # 一旦環境再読み込み
+          refreshenv
+          # gvsbuild インストール
+          pip install gvsbuild
+          # GTK4 をビルド
+          gvsbuild build gtk4
+
+      - name: Set up environment variables for GTK4
+        shell: pwsh
+        run: |
+          # PATHに bin を追加
+          echo "C:\\gtk-build\\gtk\\x64\\release\\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+          # LIB と INCLUDE を設定（Cargoビルドで拾ってもらう）
+          echo "LIB=C:\\gtk-build\\gtk\\x64\\release\\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "INCLUDE=C:\\gtk-build\\gtk\\x64\\release\\include;C:\\gtk-build\\gtk\\x64\\release\\include\\cairo;C:\\gtk-build\\gtk\\x64\\release\\include\\glib-2.0;C:\\gtk-build\\gtk\\x64\\release\\include\\gobject-introspection-1.0;C:\\gtk-build\\gtk\\x64\\release\\lib\\glib-2.0\\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Cargo Build
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Upload Artifacts
+        if: ${{ matrix.os == 'windows-2022' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtk4-rs-test-windows
+          if-no-files-found: error
+          path: target\release\gtk4-rs-test.exe
