@@ -24,7 +24,8 @@ jobs:
           cargo build --release
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: my-artifact
+          name: gtk4-rs-test
+          if-no-files-found: error
           path: target/release/gtk4-rs-test
