@@ -36,16 +36,37 @@ jobs:
           $msys_bin_path = "C:\msys64\usr\bin"
           Write-Host "Adding $msys_bin_path"
           echo "$msys_bin_path" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          # これにより、bash, pkg-configなどのMSYS2ツールがPATHから利用可能になる
 
-      - name: Verify MSYS2 tools in PATH
+      # pkg-config が存在しない、または古い場合に備えてインストール/更新
+      - name: Install/Update pkg-config using pacman
+        # MSYS2のbash環境でpacmanを実行
+        # msys2bash.cmd は windows-2022 イメージに存在するはず
+        shell: cmd
+        run: |
+          C:\msys64\usr\bin\bash -lc "pacman -Syu --noconfirm && pacman -S --needed --noconfirm pkg-config"
+
+      - name: Verify MSYS2 tools in PATH and check pkg-config location
         shell: pwsh
         run: |
+          Write-Host "--- Current PATH ---"
+          Write-Host "$env:PATH"
+          Write-Host "--------------------"
           Write-Host "Verifying bash..."
           bash --version
-          Write-Host "Verifying pkg-config..."
+          Write-Host "Finding pkg-config using 'where'..."
+          where pkg-config
+          # whereで見つかった実行ファイルを直接実行してみる
+          $pkg_config_path = (where.exe pkg-config | Select-Object -First 1)
+          if ($pkg_config_path) {
+            Write-Host "Executing found pkg-config: $pkg_config_path"
+            & $pkg_config_path --version
+          } else {
+            Write-Error "pkg-config not found in PATH"
+            exit 1
+          }
+          # PATH経由での実行も試す
+          Write-Host "Executing pkg-config via PATH..."
           pkg-config --version
-        continue-on-error: true # pkg-configがない場合もあるため、エラーでも続行
 
       # --- Install and Verify gvsbuild ---
       - name: Install gvsbuild using pipx
