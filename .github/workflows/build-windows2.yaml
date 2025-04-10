@@ -1,0 +1,157 @@
+name: Build Windows Detailed Steps
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # --- Prerequisite Checks and Setup ---
+      - name: Check installed Python version
+        shell: pwsh
+        run: |
+          Write-Host "Checking Python version..."
+          python --version
+          Write-Host "Checking pipx version..."
+          pipx --version
+          # Windows-2022にはPython 3.9とpipx 1.7.1がプリインストールされているはず
+
+      - name: Add MSYS2 to PATH
+        shell: pwsh
+        run: |
+          Write-Host "Adding MSYS2 binaries to PATH..."
+          $msys_bin_path = "C:\msys64\usr\bin"
+          Write-Host "Adding $msys_bin_path"
+          echo "$msys_bin_path" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # これにより、bash, pkg-configなどのMSYS2ツールがPATHから利用可能になる
+
+      - name: Verify MSYS2 tools in PATH
+        shell: pwsh
+        run: |
+          Write-Host "Verifying bash..."
+          bash --version
+          Write-Host "Verifying pkg-config..."
+          pkg-config --version
+        continue-on-error: true # pkg-configがない場合もあるため、エラーでも続行
+
+      # --- Install and Verify gvsbuild ---
+      - name: Install gvsbuild using pipx
+        shell: pwsh
+        run: |
+          Write-Host "Installing gvsbuild using pipx..."
+          pipx install gvsbuild
+          # pipxは自動でPATHに追加するはずだが、念のため後続で確認
+
+      - name: Add pipx path to current session
+        shell: pwsh
+        run: |
+          Write-Host "Ensuring pipx path is in GITHUB_PATH for subsequent steps..."
+          $pipx_path = Join-Path $env:USERPROFILE ".local\bin"
+          Write-Host "Adding $pipx_path to GITHUB_PATH"
+          echo "$pipx_path" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify gvsbuild installation
+        shell: pwsh
+        run: |
+          Write-Host "Verifying gvsbuild command..."
+          # PATHが更新されるのを少し待つ必要があるかもしれない
+          Start-Sleep -Seconds 5
+          gvsbuild --version
+
+      # --- Build GTK4 ---
+      - name: Build GTK4 with gvsbuild
+        shell: pwsh
+        run: |
+          Write-Host "Starting GTK4 build with gvsbuild (this will take a long time)..."
+          # --clean オプションは初回ビルドでは不要だが、再実行時に役立つことがある
+          # gvsbuild build gtk4 --clean
+          gvsbuild build gtk4
+          Write-Host "GTK4 build finished."
+
+      # --- Configure Environment for GTK4 ---
+      - name: Set GTK Environment Variables
+        id: set_gtk_env # ステップIDを追加して後で参照しやすくする
+        shell: pwsh
+        run: |
+          $gtk_basedir="C:\gtk-build\gtk\x64\release"
+          Write-Host "Setting GTK environment variables based on path: $gtk_basedir"
+
+          # PATH
+          $new_path = "$($gtk_basedir)\bin;$env:PATH"
+          Write-Host "Setting PATH environment variable"
+          echo "PATH=$new_path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # LIB (Visual Studio 用)
+          $new_lib = "$($gtk_basedir)\lib;$env:LIB"
+          Write-Host "Setting LIB environment variable"
+          echo "LIB=$new_lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # INCLUDE (Visual Studio 用)
+          $includes = @(
+            "$gtk_basedir\include",
+            "$gtk_basedir\include\cairo",
+            "$gtk_basedir\include\glib-2.0",
+            "$gtk_basedir\include\gobject-introspection-1.0",
+            "$gtk_basedir\lib\glib-2.0\include" # 特殊なパス
+          ) -join ';'
+          $new_include = "$includes;$env:INCLUDE"
+          Write-Host "Setting INCLUDE environment variable"
+          echo "INCLUDE=$new_include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # PKG_CONFIG_PATH (Rust/Meson/CMake がライブラリを見つけるために重要)
+          $pkg_config_dir = Join-Path $gtk_basedir "lib\pkgconfig"
+          $new_pkg_config_path = "$pkg_config_dir;$env:PKG_CONFIG_PATH"
+          Write-Host "Setting PKG_CONFIG_PATH environment variable to $new_pkg_config_path"
+          echo "PKG_CONFIG_PATH=$new_pkg_config_path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify GTK Environment Variables are set
+        shell: pwsh
+        run: |
+          Write-Host "--- Verifying Environment Variables ---"
+          Write-Host "PATH:"
+          Write-Host "$env:PATH"
+          Write-Host "LIB:"
+          Write-Host "$env:LIB"
+          Write-Host "INCLUDE:"
+          Write-Host "$env:INCLUDE"
+          Write-Host "PKG_CONFIG_PATH:"
+          Write-Host "$env:PKG_CONFIG_PATH"
+          Write-Host "-------------------------------------"
+
+      - name: Verify pkg-config can find GTK4
+        shell: pwsh
+        run: |
+          Write-Host "Running pkg-config to find gtk4..."
+          pkg-config --cflags --libs gtk4
+          Write-Host "pkg-config check complete."
+
+      # --- Build Rust Project ---
+      - name: Build Rust Project
+        shell: pwsh # PowerShell を使うと環境変数が正しく引き継がれることが多い
+        run: |
+          Write-Host "Starting Rust build..."
+          cargo build --release --verbose # 詳細ログを出力
+          Write-Host "Rust build finished."
+
+      # --- Upload Artifacts ---
+      - name: Upload Build Artifact
+        if: ${{ matrix.os == 'windows-2022' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtk4-rs-test-windows
+          if-no-files-found: error
+          # プロジェクトの実行ファイル名に合わせてパスを修正してください
+          path: target\release\gtk4-rs-test.exe
