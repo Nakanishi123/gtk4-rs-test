@@ -1,4 +1,4 @@
-name: Build Windows Detailed Steps
+name: Build Windows2
 
 on:
   workflow_dispatch:
